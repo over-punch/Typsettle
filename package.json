@@ -18,11 +18,12 @@
 	],
 	"scripts": {
 		"build": "vite build",
+		"build:webflow": "vite build --config vite.webflow.config.ts",
 		"capture": "node scripts/capture.mjs",
 		"test": "vitest",
 		"test:run": "vitest run",
 		"lint": "tsc --noEmit",
-		"prepublishOnly": "npm run test:run && npm run build"
+		"prepublishOnly": "npm run test:run && npm run build && npm run build:webflow"
 	},
 	"peerDependencies": {
 		"@chenglou/pretext": ">=0.0.5",

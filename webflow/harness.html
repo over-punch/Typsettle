@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>typsettle — Webflow embed harness</title>
+
+	<!-- A web font is not strictly required (the effect animates letter-spacing on any
+	     font), but loading one exercises the document.fonts.ready gating and re-run path. -->
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&display=swap"
+		rel="stylesheet"
+	/>
+
+	<style>
+		body {
+			margin: 0;
+			padding: 4rem 6vw;
+			background: #12100e;
+			color: #f3efe7;
+			font-family: 'Inter', system-ui, sans-serif;
+			line-height: 1.5;
+		}
+		h1 {
+			font-size: 0.8rem;
+			font-weight: 500;
+			letter-spacing: 0.2em;
+			text-transform: uppercase;
+			opacity: 0.5;
+			margin: 0 0 2.5rem;
+		}
+		.settle-target {
+			font-size: clamp(1.6rem, 4.5vw, 3rem);
+			font-weight: 400;
+			max-width: 22ch;
+			margin: 0 0 3rem;
+		}
+		.note {
+			max-width: 60ch;
+			font-size: 0.9rem;
+			line-height: 1.7;
+			opacity: 0.7;
+			border-top: 1px solid rgba(255, 255, 255, 0.12);
+			padding-top: 1.5rem;
+		}
+		.note code {
+			font-family: ui-monospace, monospace;
+			background: rgba(255, 255, 255, 0.08);
+			padding: 0.1em 0.35em;
+			border-radius: 3px;
+		}
+		button {
+			margin-top: 1.5rem;
+			font: inherit;
+			font-size: 0.85rem;
+			color: inherit;
+			background: rgba(255, 255, 255, 0.08);
+			border: 1px solid rgba(255, 255, 255, 0.2);
+			border-radius: 6px;
+			padding: 0.5rem 1rem;
+			cursor: pointer;
+		}
+	</style>
+</head>
+<body>
+	<h1>typsettle · Webflow embed harness</h1>
+
+	<!-- One opted-in element with representative options.
+	     data-typsettle          → opts this element in
+	     data-ts-spread          → lines start up to 0.06em off their settled tracking
+	     data-ts-duration        → 900ms ease
+	     data-ts-stagger         → each line settles 120ms after the previous
+	     data-ts-direction       → 'expand' (start wide, ease inward)
+	     data-ts-target-tracking → 'auto' equalises per-line optical density -->
+	<p
+		class="settle-target"
+		data-typsettle
+		data-ts-spread="0.06"
+		data-ts-duration="900"
+		data-ts-stagger="120"
+		data-ts-direction="expand"
+		data-ts-target-tracking="auto"
+	>
+		The compositor tunes each line until the whole paragraph breathes at one even
+		optical weight, then locks the tracking into place.
+	</p>
+
+	<button id="replay">Replay (window.Typsettle.restart)</button>
+
+	<p class="note">
+		<strong>What "working" looks like:</strong> on load, each line of the paragraph
+		appears with a slightly-off letter-spacing and animates — staggered top to bottom —
+		to its settled tracking over ~0.9s. Because <code>data-ts-target-tracking="auto"</code>
+		is set, denser lines end a touch looser and sparse lines a touch tighter, evening out
+		the optical colour. Resizing the window regroups lines by the new width and re-runs the
+		settle. Clicking <em>Replay</em> calls <code>window.Typsettle.restart()</code> to run it
+		again. With OS "reduce motion" enabled, the text simply appears at its settled state with
+		no animation (handled inside the core).
+	</p>
+
+	<!-- The single built embed bundle. Auto-inits on DOMContentLoaded + fonts.ready. -->
+	<script src="../dist/typsettle.webflow.min.js"></script>
+	<script>
+		document.getElementById('replay').addEventListener('click', function () {
+			window.Typsettle.restart()
+		})
+	</script>
+</body>
+</html>
