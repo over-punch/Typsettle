@@ -1,0 +1,64 @@
+<!doctype html>
+<!-- typsettle/framer/sim.html — Framer-less simulator for the Typsettle code component.
+     Renders the REAL src/framer/Typsettle.tsx (transpiled to Typsettle.sim.mjs) in a plain
+     browser, with the "framer" import mapped to a local shim and React from esm.sh. This proves
+     the component's runtime logic (getCleanHTML snapshot, applySettle, ResizeObserver re-run,
+     RenderTarget gating) outside Framer.
+     typsettle animates letter-spacing (tracking), not a variable-font axis, so any font reads the
+     effect — Fraunces is used here purely for editorial character in a multi-line paragraph.
+     Build step: npx esbuild src/framer/Typsettle.tsx --loader:.tsx=tsx --format=esm
+       --jsx=automatic --jsx-import-source=react --outfile=framer/Typsettle.sim.mjs -->
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Typsettle — Framer component simulator</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..700&display=swap" rel="stylesheet" />
+	<style>
+		body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0e0e12; color: #f4f4f6; padding: 4rem 6vw; }
+		#root { width: 100%; max-width: 40ch; }
+		.note { position: fixed; bottom: 1rem; left: 0; right: 0; text-align: center; font: 0.8rem system-ui; opacity: 0.5; }
+	</style>
+	<script type="importmap">
+	{
+		"imports": {
+			"react": "https://esm.sh/react@18",
+			"react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+			"react-dom/client": "https://esm.sh/react-dom@18/client",
+			"framer": "./framer-shim.js"
+		}
+	}
+	</script>
+</head>
+<body>
+	<div id="root"></div>
+	<p class="note">Simulating the Framer code component in a plain browser — RenderTarget shimmed to 'preview'.</p>
+	<script type="module">
+		import React from "react"
+		import { createRoot } from "react-dom/client"
+		import Typsettle from "./Typsettle.sim.mjs"
+		createRoot(document.getElementById("root")).render(
+			React.createElement(Typsettle, {
+				text: "Typography that settles into place, line by line, as if a compositor were tuning the paragraph in real time.",
+				fontFamily: "Fraunces",
+				fontSize: 34,
+				lineHeight: 1.4,
+				color: "#f4f4f6",
+				textAlign: "left",
+				lineDetection: "bcr",
+				spread: 0.08,
+				duration: 1200,
+				easing: "cubic-bezier(0.25, 0.1, 0.25, 1)",
+				stagger: 120,
+				direction: "expand",
+				trackingMode: "natural",
+				trackingValue: 0,
+				intersect: false,
+				active: true,
+			})
+		)
+	</script>
+</body>
+</html>
