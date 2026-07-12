@@ -134,7 +134,7 @@ applySettle(el, original, { spread: 0.04, duration: 800, stagger: 80 })
 			<PortsSection
 				npm="@liiift-studio/typsettle"
 				bundle="typsettle"
-				attr="data-typsettle"
+				attr="data-typsettle" figma="frozen"
 				framerComponent="Typsettle"
 				repo="Liiift-Studio/Typsettle"
 			/>
