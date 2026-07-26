@@ -114,7 +114,7 @@ applySettle(el, original, { spread: 0.04, duration: 800, stagger: 80 })
 									<th scope="col" className="pb-2 font-normal">Description</th>
 								</tr>
 							</thead>
-							<tbody className="text-muted zebra-bleed">
+							<tbody className="text-muted zebra">
 								<tr className="hover:bg-foreground/5 transition-colors"><td className="py-2 pr-6 font-mono">spread</td><td className="py-2 pr-6">0.04</td><td className="py-2">Max initial letter-spacing offset in em.</td></tr>
 								<tr className="hover:bg-foreground/5 transition-colors"><td className="py-2 pr-6 font-mono">duration</td><td className="py-2 pr-6">800</td><td className="py-2">Transition duration in milliseconds.</td></tr>
 								<tr className="hover:bg-foreground/5 transition-colors"><td className="py-2 pr-6 font-mono">easing</td><td className="py-2 pr-6 font-mono text-xs">&apos;cubic-bezier(0.25, 0.1, 0.25, 1)&apos;</td><td className="py-2">CSS easing string.</td></tr>
