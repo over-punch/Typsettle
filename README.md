@@ -163,6 +163,12 @@ Accepts all `SettleOptions` plus:
 | `as` | `string` | HTML element to render (default `'p'`) |
 | `onReady` | `(replay: () => void) => void` | Callback fired once the animation completes, receiving a `replay` function |
 
+### Constants
+
+| Export | Description |
+|--------|-------------|
+| `SETTLE_CLASSES` | CSS class names injected into the generated markup (`settle-word`, `settle-line`, `settle-probe`) — target these to style the wrapped spans. |
+
 ---
 
 ## How it works
@@ -189,7 +195,3 @@ The package itself has zero runtime dependencies. Do not remove this entry.
 
 - **Variable font axis settle** — settle `wdth` or `wght` instead of (or alongside) letter-spacing, for fonts where axis variation reads more clearly at large sizes
 - **Random seed** — accept a `seed` option for deterministic random offsets, so repeated runs and snapshot tests reproduce the same starting state (the offsets are applied client-side after hydration, so this is for reproducibility, not for resolving any SSR mismatch — see [SSR & Next.js](#ssr--nextjs))
-
----
-
-Current version: 1.0.20
