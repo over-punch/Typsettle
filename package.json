@@ -1,6 +1,6 @@
 {
 	"name": "@liiift-studio/typsettle",
-	"version": "1.0.21",
+	"version": "1.0.22",
 	"description": "Page-load animation where per-line tracking starts at random offsets and eases to optical equilibrium — like watching a compositor tune a paragraph",
 	"type": "module",
 	"main": "dist/index.cjs",
