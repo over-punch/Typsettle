@@ -31,7 +31,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
 	return (
 		<html lang="en" className={`h-full antialiased ${inter.variable}`}>
 			<body className="min-h-full flex flex-col">
-				<SiteHeader current="typsettle" githubUrl="https://github.com/Liiift-Studio/Typsettle" />{children}</body>
+				<SiteHeader current="typsettle" githubUrl="https://github.com/over-punch/Typsettle" />{children}</body>
 		</html>
 	)
 }

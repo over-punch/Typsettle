@@ -15,7 +15,7 @@ export default function Home() {
 				eyebrow="letter-spacing settling"
 				title={[{ text: "Settle," }, { text: "into place.", italic: true, subtle: true }]}
 				install="@overpunch/typsettle"
-				github="https://github.com/Liiift-Studio/Typsettle"
+				github="https://github.com/over-punch/Typsettle"
 				tech={["TypeScript", "Zero dependencies", "React + Vanilla JS"]}
 			>
 				<p className="text-base leading-relaxed max-w-lg">
@@ -114,7 +114,7 @@ applySettle(el, original, { spread: 0.04, duration: 800, stagger: 80 })
 				bundle="typsettle"
 				attr="data-typsettle" figma="frozen"
 				framerComponent="Typsettle"
-				repo="Liiift-Studio/Typsettle"
+				repo="over-punch/Typsettle"
 			/>
 
 			<SiteFooter current="typsettle" npmVersion={version} siteVersion={siteVersion} />

@@ -1,14 +1,14 @@
 # Typsettle
 
-[![npm](https://img.shields.io/npm/v/%40liiift-studio%2Ftypsettle.svg)](https://www.npmjs.com/package/@overpunch/typsettle) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/Liiift-Studio/type-tools)
+[![npm](https://img.shields.io/npm/v/%40overpunch%2Ftypsettle.svg)](https://www.npmjs.com/package/@overpunch/typsettle) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/over-punch/type-tools)
 
 Paragraph text enters from randomised letter-spacing and transitions to optical equilibrium. A page-load animation that feels typographic rather than decorative — lines staggered, motion purposeful. Like watching a compositor tune a paragraph. Respects `prefers-reduced-motion`.
 
-![Each line of a paragraph starts at a random letter-spacing offset and eases independently to its settled tracking, staggered line by line.](https://raw.githubusercontent.com/Liiift-Studio/Typsettle/main/assets/settle.gif?v=1)
+![Each line of a paragraph starts at a random letter-spacing offset and eases independently to its settled tracking, staggered line by line.](https://raw.githubusercontent.com/over-punch/Typsettle/main/assets/settle.gif?v=1)
 
 > Each line starts at a random tracking offset and eases to its settled spacing, staggered line by line. ([live demo](https://typsettle.com))
 
-**[typsettle.com](https://typsettle.com)** · [npm](https://www.npmjs.com/package/@overpunch/typsettle) · [GitHub](https://github.com/Liiift-Studio/Typsettle)
+**[typsettle.com](https://typsettle.com)** · [npm](https://www.npmjs.com/package/@overpunch/typsettle) · [GitHub](https://github.com/over-punch/Typsettle)
 
 TypeScript · Zero runtime dependencies (~4 kB gzip) · React + Vanilla JS
 

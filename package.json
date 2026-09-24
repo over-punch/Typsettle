@@ -80,10 +80,10 @@
 	"homepage": "https://typsettle.com",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/Liiift-Studio/Typsettle.git"
+		"url": "git+https://github.com/over-punch/Typsettle.git"
 	},
 	"bugs": {
-		"url": "https://github.com/Liiift-Studio/Typsettle/issues"
+		"url": "https://github.com/over-punch/Typsettle/issues"
 	},
 	"sideEffects": false,
 	"publishConfig": {
