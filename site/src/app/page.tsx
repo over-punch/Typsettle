@@ -14,7 +14,7 @@ export default function Home() {
 			<Hero
 				eyebrow="letter-spacing settling"
 				title={[{ text: "Settle," }, { text: "into place.", italic: true, subtle: true }]}
-				install="@liiift-studio/typsettle"
+				install="@overpunch/typsettle"
 				github="https://github.com/Liiift-Studio/Typsettle"
 				tech={["TypeScript", "Zero dependencies", "React + Vanilla JS"]}
 			>
@@ -54,7 +54,7 @@ export default function Home() {
 				<div className="flex flex-col gap-8 text-sm">
 					<div className="flex flex-col gap-3">
 						<p className="text-muted">Drop-in component</p>
-						<CodeBlock code={`import { SettleText } from '@liiift-studio/typsettle'
+						<CodeBlock code={`import { SettleText } from '@overpunch/typsettle'
 
 <SettleText spread={0.04} duration={800} stagger={80}>
   Your paragraph text here...
@@ -62,14 +62,14 @@ export default function Home() {
 					</div>
 					<div className="flex flex-col gap-3">
 						<p className="text-muted">Hook</p>
-						<CodeBlock code={`import { useSettle } from '@liiift-studio/typsettle'
+						<CodeBlock code={`import { useSettle } from '@overpunch/typsettle'
 
 const { ref, replay } = useSettle({ spread: 0.04, duration: 800, stagger: 80 })
 return <p ref={ref}>{children}</p>`} />
 					</div>
 					<div className="flex flex-col gap-3">
 						<p className="text-muted">Vanilla JS</p>
-						<CodeBlock code={`import { applySettle, removeSettle, replaySettle, getCleanHTML } from '@liiift-studio/typsettle'
+						<CodeBlock code={`import { applySettle, removeSettle, replaySettle, getCleanHTML } from '@overpunch/typsettle'
 
 const el = document.querySelector('p')
 const original = getCleanHTML(el)
@@ -110,7 +110,7 @@ applySettle(el, original, { spread: 0.04, duration: 800, stagger: 80 })
 			</section>
 
 			<PortsSection
-				npm="@liiift-studio/typsettle"
+				npm="@overpunch/typsettle"
 				bundle="typsettle"
 				attr="data-typsettle" figma="frozen"
 				framerComponent="Typsettle"

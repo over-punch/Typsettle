@@ -1,6 +1,6 @@
 # Typsettle
 
-[![npm](https://img.shields.io/npm/v/%40liiift-studio%2Ftypsettle.svg)](https://www.npmjs.com/package/@liiift-studio/typsettle) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/Liiift-Studio/type-tools)
+[![npm](https://img.shields.io/npm/v/%40liiift-studio%2Ftypsettle.svg)](https://www.npmjs.com/package/@overpunch/typsettle) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/Liiift-Studio/type-tools)
 
 Paragraph text enters from randomised letter-spacing and transitions to optical equilibrium. A page-load animation that feels typographic rather than decorative — lines staggered, motion purposeful. Like watching a compositor tune a paragraph. Respects `prefers-reduced-motion`.
 
@@ -8,7 +8,7 @@ Paragraph text enters from randomised letter-spacing and transitions to optical 
 
 > Each line starts at a random tracking offset and eases to its settled spacing, staggered line by line. ([live demo](https://typsettle.com))
 
-**[typsettle.com](https://typsettle.com)** · [npm](https://www.npmjs.com/package/@liiift-studio/typsettle) · [GitHub](https://github.com/Liiift-Studio/Typsettle)
+**[typsettle.com](https://typsettle.com)** · [npm](https://www.npmjs.com/package/@overpunch/typsettle) · [GitHub](https://github.com/Liiift-Studio/Typsettle)
 
 TypeScript · Zero runtime dependencies (~4 kB gzip) · React + Vanilla JS
 
@@ -17,7 +17,7 @@ TypeScript · Zero runtime dependencies (~4 kB gzip) · React + Vanilla JS
 ## Install
 
 ```bash
-npm install @liiift-studio/typsettle
+npm install @overpunch/typsettle
 ```
 
 ---
@@ -31,7 +31,7 @@ npm install @liiift-studio/typsettle
 ```tsx
 'use client'
 
-import { SettleText } from '@liiift-studio/typsettle'
+import { SettleText } from '@overpunch/typsettle'
 
 <SettleText spread={0.04} duration={800} stagger={80}>
   Your paragraph text here...
@@ -43,7 +43,7 @@ import { SettleText } from '@liiift-studio/typsettle'
 ```tsx
 'use client'
 
-import { useSettle } from '@liiift-studio/typsettle'
+import { useSettle } from '@overpunch/typsettle'
 
 // Inside a React component:
 const { ref, replay } = useSettle({ spread: 0.04, duration: 800, stagger: 80 })
@@ -55,7 +55,7 @@ The hook returns a `replay` function so you can re-run the settle on demand — 
 ```tsx
 'use client'
 
-import { useSettle } from '@liiift-studio/typsettle'
+import { useSettle } from '@overpunch/typsettle'
 
 export function SettlingParagraph() {
   const { ref, replay } = useSettle({ spread: 0.04, duration: 800, stagger: 80 })
@@ -74,7 +74,7 @@ export function SettlingParagraph() {
 ### Vanilla JS
 
 ```ts
-import { applySettle, removeSettle, replaySettle, getCleanHTML } from '@liiift-studio/typsettle'
+import { applySettle, removeSettle, replaySettle, getCleanHTML } from '@overpunch/typsettle'
 
 const el = document.querySelector('p')
 const original = getCleanHTML(el)
@@ -99,7 +99,7 @@ document.fonts.ready.then(() => {
 ### TypeScript
 
 ```ts
-import type { SettleOptions } from '@liiift-studio/typsettle'
+import type { SettleOptions } from '@overpunch/typsettle'
 
 const opts: SettleOptions = { spread: 0.04, duration: 800, stagger: 80, active: true }
 ```

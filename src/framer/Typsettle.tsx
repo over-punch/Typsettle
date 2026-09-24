@@ -18,7 +18,7 @@ import { useEffect, useRef } from "react"
 import { addPropertyControls, ControlType, RenderTarget } from "framer"
 // Pin to a published version so shared instances stay stable. Bump when the core changes.
 // The core is framework-agnostic (operates on a DOM element), so no React externalisation is needed.
-import { applySettle, removeSettle, replaySettle, getCleanHTML } from "https://esm.sh/@liiift-studio/typsettle@1.0.21"
+import { applySettle, removeSettle, replaySettle, getCleanHTML } from "https://esm.sh/@overpunch/typsettle@1.0.21"
 
 /** Props surfaced to the Framer UI via addPropertyControls, plus base text styling.
  *  Option fields are declared explicitly so the component needs no type import over HTTP. */
