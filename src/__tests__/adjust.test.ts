@@ -300,3 +300,67 @@ describe('settle', () => {
 		expect(style).toContain('800ms')
 	})
 })
+
+// ─── Review fixes (2026-10) ──────────────────────────────────────────────────
+
+import { replaySettle } from '../core/adjust'
+
+describe('review fixes', () => {
+	let cleanup: (() => void) | null = null
+	beforeEach(() => { document.body.innerHTML = ''; cleanup = mockMeasurement() })
+	afterEach(() => { cleanup?.(); cleanup = null; vi.restoreAllMocks() })
+
+	it('keeps the spaces between elements, one link stays one link, getCleanHTML returns the input', () => {
+		const html = '<em>alpha</em> <strong>beta</strong> gamma <a href="#x" id="L">delta</a> epsilon.'
+		const el = makeElement(html)
+		const text = el.textContent
+		applySettle(el, html, {})
+		expect(el.textContent).toBe(text)
+		expect(el.querySelectorAll('#L').length).toBe(1)
+		expect(getCleanHTML(el)).toBe(html)
+	})
+
+	it('ends every line at the settled spacing with a transition, synchronously', () => {
+		const html = 'One two three four five six seven eight nine ten eleven twelve'
+		const el = makeElement(html)
+		applySettle(el, html, { duration: 500 })
+		const lines = el.querySelectorAll<HTMLElement>(`.${SETTLE_CLASSES.line}`)
+		expect(lines.length).toBeGreaterThan(0)
+		lines.forEach((line) => {
+			expect(line.style.transition).toContain('letter-spacing')
+			expect(parseFloat(line.style.letterSpacing)).toBe(0)
+		})
+	})
+
+	it('rejects an easing that would inject markup or other CSS', () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const html = 'One two three four five six seven'
+		const el = makeElement(html)
+		applySettle(el, html, { easing: 'ease"><img src=x onerror=alert(1)>' })
+		expect(el.querySelectorAll('img').length).toBe(0)
+		const line = el.querySelector<HTMLElement>(`.${SETTLE_CLASSES.line}`)!
+		expect(line.style.transition).not.toContain('img')
+	})
+
+	it('replaySettle(el) with one argument replays the element instead of emptying it', () => {
+		const html = 'One two three four five six seven'
+		const el = makeElement(html)
+		applySettle(el, html, {})
+		replaySettle(el)
+		expect(el.textContent).toBe(html)
+		removeSettle(el)
+		expect(el.innerHTML).toBe(html)
+	})
+
+	it('keeps the original elements, so their listeners survive a re-run', () => {
+		const html = 'Please read <a href="#">our terms</a> carefully now.'
+		const el = makeElement(html)
+		const link = el.querySelector('a')!
+		let clicks = 0
+		link.addEventListener('click', (e) => { e.preventDefault(); clicks++ })
+		applySettle(el, html, {})
+		applySettle(el, html, {})
+		el.querySelector('a')!.click()
+		expect(clicks).toBe(1)
+	})
+})

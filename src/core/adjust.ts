@@ -11,24 +11,33 @@ type PretextModule = {
 let _pretext: PretextModule | null = null
 let _pretextLoading = false
 
-function tryLoadPretext(): void {
-	if (_pretext !== null || _pretextLoading) return
+let _pretextPromise: Promise<void> | null = null
+
+/** Starts (once) loading the optional pretext package; resolves when it is ready or has failed. */
+function tryLoadPretext(): Promise<void> {
+	if (_pretext !== null) return Promise.resolve()
+	if (_pretextLoading && _pretextPromise) return _pretextPromise
 	_pretextLoading = true
 	// @ts-ignore — optional peer dep; suppress "cannot find module" without a declaration stub
-	import(/* @vite-ignore */ '@chenglou/pretext')
-		.then((m) => { _pretext = m as PretextModule })
+	_pretextPromise = import(/* @vite-ignore */ /* webpackIgnore: true */ '@chenglou/pretext')
+		.then((m) => {
+			const mod = m as PretextModule & { default?: PretextModule }
+			_pretext = typeof mod.prepareWithSegments === 'function' ? mod : (mod.default ?? null)
+		})
 		.catch(() => {
+			_pretextLoading = false
 			console.warn('[typsettle] canvas lineDetection requires @chenglou/pretext — falling back to BCR')
 		})
+	return _pretextPromise
 }
 
 type PreparedEntry = { originalHTML: string; prepared: unknown }
 const pretextCache = new WeakMap<HTMLElement, PreparedEntry>()
 
 function getCanvasFont(el: HTMLElement): string {
+	// The whole computed family list: the browser quotes names that need it ("Source Serif 4").
 	const s = getComputedStyle(el)
-	const family = s.fontFamily.split(',')[0].replace(/['"]/g, '').trim()
-	return `${s.fontWeight} ${s.fontSize} ${family}`
+	return `${s.fontStyle} ${s.fontWeight} ${s.fontSize} ${s.fontFamily}`
 }
 
 function getLineHeightPx(el: HTMLElement): number {
@@ -76,20 +85,146 @@ const DEFAULTS = {
 	stagger: 0,
 }
 
-/** Tags treated as atomic (not walked into; wrapped as a unit in a word span) */
-const ATOMIC_TAGS = new Set(['img', 'svg', 'canvas', 'video', 'iframe', 'br', 'hr', 'input'])
+/** Per-item data kept during one apply: the whitespace before it, an author <br> before it, and whether it is a whole element. */
+interface ItemMeta {
+	lead: string
+	breakBefore: HTMLBRElement | null
+	atomic?: boolean
+}
 
-type CollectedItem =
-	| { type: 'text'; node: Text }
-	| { type: 'atomic'; el: HTMLElement }
+/** A piece of one item on one line: usually a whole word, or part of a word the browser breaks. */
+interface Segment {
+	item: HTMLElement
+	text: string
+	top: number
+	bottom: number
+	lead: string
+	breakBefore: HTMLBRElement | null
+	atomic: boolean
+	/** Whether this is the item's first segment (its start is the span's start). */
+	first: boolean
+}
 
 /**
- * Returns the innerHTML of an element with all settle-injected spans removed,
- * unwrapping their children in place. Idempotent and safe for complex markup.
+ * Splits a text node that the browser lays out over several lines into one piece per line, by
+ * measuring where each character's box starts a new line. Used only for the rare word that wraps.
+ */
+function splitAtLineBreaks(node: Text, text: string): { text: string; top: number; bottom: number }[] {
+	const pieces: { text: string; top: number; bottom: number }[] = []
+	const range = document.createRange()
+	let start = 0
+	let top = NaN, bottom = NaN
+	for (let i = 0; i < text.length; i++) {
+		range.setStart(node, i)
+		range.setEnd(node, i + 1)
+		const rect = range.getClientRects()[0]
+		if (!rect) continue
+		const middle = (rect.top + rect.bottom) / 2
+		if (Number.isNaN(top)) { top = rect.top; bottom = rect.bottom; continue }
+		if (middle > bottom) {
+			pieces.push({ text: text.slice(start, i), top, bottom })
+			start = i
+			top = rect.top
+			bottom = rect.bottom
+		} else {
+			bottom = Math.max(bottom, rect.bottom)
+		}
+	}
+	pieces.push({ text: text.slice(start), top: Number.isNaN(top) ? 0 : top, bottom: Number.isNaN(bottom) ? 0 : bottom })
+	return pieces.filter((p) => p.text.length > 0)
+}
+
+/** Elements kept whole during the rebuild (no text of their own to split). */
+const ATOMIC_TAGS = new Set(['IMG', 'SVG', 'INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'VIDEO', 'AUDIO', 'CANVAS', 'IFRAME', 'OBJECT', 'MATH'])
+
+/** Scripts written without spaces between words: every grapheme is a possible line break. */
+const UNSPACED_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u
+
+/**
+ * Splits a space-free token into the pieces a line may break between: graphemes for CJK, Thai and
+ * similar scripts (Intl.Segmenter keeps combining marks with their base), the whole token otherwise.
+ */
+function splitUnspaced(token: string): string[] {
+	if (!UNSPACED_SCRIPT.test(token)) return [token]
+	const Seg = (Intl as unknown as { Segmenter?: new (l?: string, o?: { granularity: string }) => { segment(t: string): Iterable<{ segment: string }> } }).Segmenter
+	if (!Seg) return Array.from(token)
+	return Array.from(new Seg(undefined, { granularity: 'grapheme' }).segment(token), (seg) => seg.segment)
+}
+
+/** A finite number, else the default (with a one-time warning). */
+function finiteOr(value: unknown, fallback: number, name: string): number {
+	if (value === undefined) return fallback
+	if (typeof value === 'number' && Number.isFinite(value)) return value
+	if (!warned.has(name)) {
+		warned.add(name)
+		console.warn(`[typsettle] ${name} must be a finite number; got ${String(value)}, using ${fallback}`)
+	}
+	return fallback
+}
+
+/** Warnings already printed. */
+const warned = new Set<string>()
+
+/** The snapshot each processed element was built from, returned by getCleanHTML. */
+const originals = new WeakMap<HTMLElement, string>()
+
+/**
+ * The element's original nodes: each element's child list, so a refit or removal can put the very
+ * same nodes back (keeping their event listeners, React's included) instead of re-parsing HTML.
+ */
+interface NodeSnapshot { html: string; children: Map<Node, Node[]> }
+const snapshots = new WeakMap<HTMLElement, NodeSnapshot>()
+
+/** Records every element's child list under root. */
+function takeSnapshot(root: HTMLElement, html: string): NodeSnapshot {
+	const children = new Map<Node, Node[]>()
+	const visit = (node: Node) => {
+		children.set(node, Array.from(node.childNodes))
+		node.childNodes.forEach((child) => { if (child.nodeType === Node.ELEMENT_NODE) visit(child) })
+	}
+	visit(root)
+	return { html, children }
+}
+
+/** Puts the original nodes back where they were. */
+function restoreSnapshot(snapshot: NodeSnapshot): void {
+	snapshot.children.forEach((kids, parent) => (parent as Element).replaceChildren(...kids))
+}
+
+/**
+ * Pass 1: bring the element back to its original content, reusing the original nodes when they
+ * are still known (a refit, or a first run on an element that already holds originalHTML).
+ */
+function resetElement(element: HTMLElement, originalHTML: string): void {
+	const snap = snapshots.get(element)
+	if (snap && snap.html === originalHTML) {
+		restoreSnapshot(snap)
+		return
+	}
+	if (snap) restoreSnapshot(snap)
+	const current = element.querySelector(`.${SETTLE_CLASSES.line}`) ? null : element.innerHTML
+	if (current !== originalHTML) element.innerHTML = originalHTML
+	snapshots.set(element, takeSnapshot(element, originalHTML))
+}
+
+// ─── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Strips all optical-margin injected markup from a clone of the element and returns the clean
+ * innerHTML (the author's own <br> tags are kept). Safe to call multiple times — idempotent.
+ *
+ * @param el - Element that may contain optical-margin markup
+
+
+/**
+ * Returns the element's original innerHTML: for an element this library processed, the exact
+ * snapshot it was built from; otherwise the innerHTML with any settle markup removed. Idempotent.
  *
  * @param el - Element that may contain settle markup
  */
 export function getCleanHTML(el: HTMLElement): string {
+	const original = originals.get(el)
+	if (original !== undefined && el.querySelector(`.${SETTLE_CLASSES.line}`)) return original
 	const clone = el.cloneNode(true) as HTMLElement
 	const settleSpans = clone.querySelectorAll(
 		`.${SETTLE_CLASSES.word}, .${SETTLE_CLASSES.line}, .${SETTLE_CLASSES.probe}`,
@@ -100,428 +235,423 @@ export function getCleanHTML(el: HTMLElement): string {
 		while (node.firstChild) parent.insertBefore(node.firstChild, node)
 		parent.removeChild(node)
 	})
-	// Also remove any <br> elements injected between line spans
 	clone.querySelectorAll('br[data-settle-br]').forEach((br) => br.parentNode?.removeChild(br))
+	clone.normalize()
 	return clone.innerHTML
 }
 
+/** Prints a console warning the first time it is seen. */
+function warnOnce(message: string): void {
+	if (warned.has(message)) return
+	warned.add(message)
+	console.warn(message)
+}
+
+/** The settled letter-spacing (em) of each line span, so a replay never reads a mid-transition value. */
+const settledEm = new WeakMap<HTMLElement, number>()
+
+/** Latest apply per element, so pretext finishing a load re-applies only if nothing newer ran. */
+const latestApply = new WeakMap<HTMLElement, object>()
+
+/** A CSS timing function the browser accepts, else the default (with a warning). */
+function safeEasing(easing: unknown): string {
+	if (typeof easing !== 'string' || !easing.trim()) return DEFAULTS.easing
+	// Only the characters a timing function can contain (letters, digits, commas, dots, minus,
+	// parentheses, spaces), then the browser's own check.
+	const ok = /^[\w\s(),.-]+$/.test(easing) && (typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+		? CSS.supports('transition-timing-function', easing)
+		: /^[a-z-]+(\([\d.,\s-]*\))?$/i.test(easing.trim()))
+	if (ok) return easing.trim()
+	warnOnce(`[typsettle] easing "${easing}" is not a valid timing function; using the default`)
+	return DEFAULTS.easing
+}
+
+/** spread is in em: anything over 1em pushes lines far past the column while animating. */
+function clampSpread(spread: number): number {
+	if (spread <= 1) return spread
+	warnOnce(`[typsettle] spread ${spread}em is very large; using 1em`)
+	return 1
+}
+
+/** Formats an em value for letter-spacing ("0" for zero). */
+const emValue = (v: number) => (v === 0 ? '0' : `${v.toFixed(4)}em`)
+
 /**
- * Applies the settle page-load animation to an element.
+ * Applies the settle animation to an element: each visual line starts with offset letter-spacing
+ * and eases to its settled value.
  *
- * The algorithm runs five passes:
- *  1. Reset — restore the element to the original HTML snapshot
- *  2. Content collection — gather text nodes and atomic elements (img, svg, etc.)
- *  3. Line grouping — read BCR.top for each word span to detect visual lines
- *  4. Line span assembly — wrap each line's words in a letter-spacing span with a random offset
- *  5. Transition trigger — after one rAF, set letter-spacing to the target to trigger CSS transition
+ *  1. Reset — bring back the original content (the original nodes, when known)
+ *  2. Word wrap — wrap each word in a plain inline span, leaving the spaces between words in the
+ *     text flow, so the browser breaks lines exactly as it does for the original text
+ *  3. Line grouping — by position (a word the browser breaks is split there)
+ *  4. Rebuild — one line span per line inside its inline ancestors (one link stays one link within a
+ *     line), reusing the original elements so their listeners keep working
+ *  5. Animate — each line is set to its start spacing with transitions off, the browser computes
+ *     that state, then the transition is switched on and the settled spacing set
  *
  * @param element      - The live DOM element to animate (must be rendered and visible)
- * @param originalHTML - HTML snapshot taken before the first applySettle call
+ * @param originalHTML - HTML snapshot taken before the first applySettle call (getCleanHTML)
  * @param options      - SettleOptions (merged with defaults)
  */
 export function applySettle(
 	element: HTMLElement,
 	originalHTML: string,
-	options: SettleOptions = {},
+	options: SettleOptions | null = {},
 ): void {
-	if (typeof window === 'undefined') return
+	if (typeof window === 'undefined' || !element) return
+	const opts = options ?? {}
 
-	// Respect the active flag and the user's reduced-motion preference
-	const active = options.active ?? true
-	const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-	if (!active || prefersReducedMotion) {
-		element.innerHTML = originalHTML
+	// Inactive, reduced motion, or an e-ink / slow-refresh display: the original content, no animation.
+	const active = opts.active ?? true
+	if (!active || window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches || window.matchMedia?.('(update: slow)')?.matches) {
+		resetElement(element, originalHTML)
 		return
 	}
 
-	// On e-ink / slow-update displays the CSS transition produces no visible effect.
-	// Skip the random-offset phase entirely — just restore original HTML and return.
-	// matchMedia('(update: slow)') is true on Kindle, Remarkable, and similar panels.
-	if (window.matchMedia?.('(update: slow)')?.matches) {
-		element.innerHTML = originalHTML
-		return
-	}
+	const spread   = clampSpread(Math.abs(finiteOr(opts.spread, DEFAULTS.spread, 'spread')))
+	const duration = Math.max(0, finiteOr(opts.duration, DEFAULTS.duration, 'duration'))
+	const easing   = safeEasing(opts.easing ?? DEFAULTS.easing)
+	const stagger  = Math.max(0, finiteOr(opts.stagger, DEFAULTS.stagger, 'stagger'))
+	const direction = opts.direction ?? 'expand'
 
-	// Save scroll position — iOS Safari does not support overflow-anchor: none
-	const scrollY = window.scrollY
-
-	const spread   = options.spread   ?? DEFAULTS.spread
-	const duration = options.duration ?? DEFAULTS.duration
-	const easing   = options.easing   ?? DEFAULTS.easing
-	const stagger  = options.stagger  ?? DEFAULTS.stagger
+	const applyToken = {}
+	latestApply.set(element, applyToken)
 
 	// --- Pass 1: Reset ---
-	element.innerHTML = originalHTML
+	resetElement(element, originalHTML)
+	originals.set(element, originalHTML)
+	if (!element.textContent?.trim()) return
+	if (!element.offsetWidth && !element.getBoundingClientRect().width) return
 
-	// Guard empty element — nothing to animate
-	if (!element.textContent?.trim()) {
-		requestAnimationFrame(() => {
-			if (Math.abs(window.scrollY - scrollY) > 2) {
-				window.scrollTo({ top: scrollY, behavior: 'instant' })
-			}
-		})
-		return
-	}
-
-	// Capture the element's existing letter-spacing as the settled baseline.
-	// This way we respect any CSS letter-spacing already applied to the element
-	// and treat it as the 0-point rather than overriding it with literal 0em.
+	// The element's own letter-spacing is the settled baseline.
 	const computedStyle = getComputedStyle(element)
 	const fontSizePx    = parseFloat(computedStyle.fontSize) || 16
 	const originalLSPx  = parseFloat(computedStyle.letterSpacing) || 0
 	const originalLSEm  = originalLSPx / fontSizePx
+	const px = (v: string) => parseFloat(v) || 0
+	const contentWidth = element.getBoundingClientRect().width - px(computedStyle.paddingLeft) - px(computedStyle.paddingRight) - px(computedStyle.borderLeftWidth) - px(computedStyle.borderRightWidth)
 
-	// --- Pass 2: Content collection ---
-	// Collect text nodes AND atomic inline elements via recursive childNodes walk
-	// (NOT createTreeWalker — happy-dom bug skips inline ancestors like <em>, <strong>).
-	// Atomic tags (img, svg, etc.) are treated as indivisible units: wrapped in a word
-	// span in place so they participate in BCR line detection and buildLineHTML correctly.
-	const items: CollectedItem[] = []
-	;(function collectItems(node: Node) {
+	// --- Pass 2: Word wrap ---
+	const items: HTMLElement[] = []
+	const meta = new WeakMap<Element, ItemMeta>()
+	let pendingSpace = ''
+	let pendingBreak: HTMLBRElement | null = null
+	const pushWord = (span: HTMLElement, lead: string) => {
+		meta.set(span, { lead: pendingSpace + lead, breakBefore: pendingBreak })
+		pendingSpace = ''
+		pendingBreak = null
+		items.push(span)
+	}
+	const walk = (node: Node): void => {
 		if (node.nodeType === Node.TEXT_NODE) {
-			items.push({ type: 'text', node: node as Text })
-		} else if (node.nodeType === Node.ELEMENT_NODE) {
-			const el = node as HTMLElement
-			if (ATOMIC_TAGS.has(el.tagName.toLowerCase())) {
-				items.push({ type: 'atomic', el })
-			} else {
-				node.childNodes.forEach(collectItems)
+			const textNode = node as Text
+			const text = textNode.textContent ?? ''
+			if (!text.trim()) { pendingSpace += text; return }
+			const fragment = document.createDocumentFragment()
+			let lead = ''
+			for (const token of text.split(/(\s+)/)) {
+				if (!token) continue
+				if (/^\s+$/.test(token)) {
+					fragment.appendChild(document.createTextNode(token))
+					lead += token
+					continue
+				}
+				for (const piece of splitUnspaced(token)) {
+					const span = document.createElement('span')
+					span.className = SETTLE_CLASSES.word
+					// A locked nowrap line can't hyphenate, so the measurement mustn't either.
+					span.style.hyphens = 'manual'
+					span.textContent = piece
+					fragment.appendChild(span)
+					pushWord(span, lead)
+					lead = ''
+				}
 			}
+			pendingSpace += lead
+			textNode.parentNode!.replaceChild(fragment, textNode)
+			return
 		}
-	})(element)
-
-	const wordSpans: HTMLElement[] = []
-
-	for (const item of items) {
-		if (item.type === 'atomic') {
-			// Wrap the atomic element in a word span in place
-			const span = document.createElement('span')
-			span.className = SETTLE_CLASSES.word
-			item.el.parentNode!.insertBefore(span, item.el)
-			span.appendChild(item.el)
-			wordSpans.push(span)
-			continue
+		if (node.nodeType !== Node.ELEMENT_NODE) return
+		const el = node as Element
+		if (el.tagName === 'BR') { pendingBreak = el as HTMLBRElement; return }
+		if (!el.hasChildNodes() || ATOMIC_TAGS.has(el.tagName)) {
+			meta.set(el, { lead: pendingSpace, breakBefore: pendingBreak, atomic: true })
+			pendingSpace = ''
+			pendingBreak = null
+			items.push(el as HTMLElement)
+			return
 		}
-
-		const textNode = item.node
-		const text = textNode.textContent ?? ''
-		if (!text) continue
-
-		// Split into alternating [whitespace, word, whitespace, word, …] tokens.
-		// Odd-indexed entries (tokens[1], tokens[3], …) are words.
-		const tokens = text.split(/(\S+)/)
-		const fragment = document.createDocumentFragment()
-
-		for (let i = 0; i < tokens.length; i += 2) {
-			const space = tokens[i]        // whitespace gap before this word
-			const word  = tokens[i + 1]   // word (undefined at end of string)
-			if (!word) continue
-
-			// Include trailing whitespace in the last word span of this text node
-			// to avoid orphan text nodes at inline-element boundaries.
-			const isLastWord = tokens[i + 3] === undefined
-			const trailingSpace = isLastWord ? (tokens[i + 2] ?? '') : ''
-
-			const span = document.createElement('span')
-			span.className = SETTLE_CLASSES.word
-			span.appendChild(document.createTextNode(space + word + trailingSpace))
-			fragment.appendChild(span)
-			wordSpans.push(span)
-		}
-
-		textNode.parentNode!.replaceChild(fragment, textNode)
+		Array.from(el.childNodes).forEach(walk)
 	}
-
-	// Guard: no word spans produced (e.g. whitespace-only content)
-	if (wordSpans.length === 0) {
-		requestAnimationFrame(() => {
-			if (Math.abs(window.scrollY - scrollY) > 2) {
-				window.scrollTo({ top: scrollY, behavior: 'instant' })
-			}
-		})
-		return
-	}
+	Array.from(element.childNodes).forEach(walk)
+	if (items.length === 0) { resetElement(element, originalHTML); return }
 
 	// --- Pass 3: Line grouping ---
-	// Canvas path: pretext arithmetic (no forced reflow on resize).
-	// BCR path: getBoundingClientRect — ground truth for actual browser layout.
-
-	const lineDetection = options.lineDetection ?? 'bcr'
-	if (lineDetection === 'canvas') tryLoadPretext()
-
-	const useCanvas = lineDetection === 'canvas' && _pretext !== null
-
-	const lines: HTMLElement[][] = []
-
-	if (useCanvas) {
-		const cached = pretextCache.get(element)
-		let prepared: unknown
-		if (cached && cached.originalHTML === originalHTML) {
-			prepared = cached.prepared
-		} else {
-			// Use per-span computed fonts for canvas measurement so mixed-size inline
-			// elements (e.g. a <code> with smaller font-size) are measured correctly.
-			// Fall back to root element font for spans that haven't rendered yet.
-			const spanFonts = wordSpans.map((s) => getCanvasFont(s))
-			const rootFont = getCanvasFont(element)
-			const representativeFont = spanFonts[0] ?? rootFont
-			prepared = _pretext!.prepareWithSegments(element.textContent ?? '', representativeFont)
-			pretextCache.set(element, { originalHTML, prepared })
-		}
-		const { lines: pretextLines } = _pretext!.layoutWithLines(prepared, element.offsetWidth, getLineHeightPx(element))
-
-		let si = 0
-		for (let li = 0; li < pretextLines.length && si < wordSpans.length; li++) {
-			const target = pretextLines[li].text.replace(/\s+/g, ' ').trim()
-			const group: HTMLElement[] = []
-			let acc = ''
-			while (si < wordSpans.length) {
-				const word = (wordSpans[si].textContent ?? '').replace(/\s+/g, ' ').trim()
-				acc = acc ? acc + ' ' + word : word
-				group.push(wordSpans[si])
-				si++
-				if (acc === target) break
-			}
-			if (group.length > 0) lines.push(group)
-		}
-		while (si < wordSpans.length) {
-			lines[lines.length - 1]?.push(wordSpans[si++])
-		}
-	} else {
-		// BCR path — batch all reads before any writes.
-		// Normalize top by element line-height before rounding so mixed font-sizes
-		// (e.g. <code> at text-xs inside a text-sm paragraph) don't straddle a line
-		// boundary due to subpixel top differences that are smaller than the line-height step.
-		const elementTop = element.getBoundingClientRect().top
-		const lhPx = getLineHeightPx(element)
-		const wordTops = wordSpans.map((w) =>
-			Math.round((w.getBoundingClientRect().top - elementTop) / lhPx)
-		)
-		let currentTop = wordTops[0]
-		let currentLine: HTMLElement[] = []
-		for (let i = 0; i < wordSpans.length; i++) {
-			if (wordTops[i] !== currentTop) {
-				lines.push(currentLine)
-				currentLine = []
-				currentTop = wordTops[i]
-			}
-			currentLine.push(wordSpans[i])
-		}
-		lines.push(currentLine)
+	const lineDetection = opts.lineDetection ?? 'bcr'
+	if (lineDetection === 'canvas' && _pretext === null) {
+		// First call: BCR now, and re-apply once pretext has loaded (if nothing newer ran).
+		tryLoadPretext().then(() => {
+			if (_pretext && element.isConnected && latestApply.get(element) === applyToken) applySettle(element, originalHTML, opts)
+		})
 	}
-
-	// --- Density target computation (optional) ---
-	// When targetTracking is set, compute a per-line settling target before clearing DOM.
-	// 'auto': measure canvas density per line → equalize around the average (±0.05em clamp).
-	// number: all lines share the explicit em value.
-	let targetTrackingValues: number[] | null = null
-	const targetTrackingOption = options.targetTracking
-
-	if (targetTrackingOption !== undefined) {
-		if (typeof targetTrackingOption === 'number') {
-			targetTrackingValues = lines.map(() => targetTrackingOption)
-		} else {
-			// 'auto' — per-line optical density via off-screen canvas
-			const font     = getCanvasFont(element)
-			const fontSize = parseFloat(getComputedStyle(element).fontSize)
-			const densities = lines.map((lineWords) => {
-				const text = lineWords.map((w) => (w.textContent ?? '').trim()).join(' ')
-				return measureLineDensity(text, font, fontSize)
-			})
-			const avg = densities.reduce((a, b) => a + b, 0) / densities.length
-			// Dense lines (above avg) get positive tracking to spread out.
-			// Sparse lines (below avg) get negative tracking to tighten.
-			const calibration = 2.0
-			const maxAdj      = 0.05
-			targetTrackingValues = densities.map((d) => {
-				const raw = (d - avg) * calibration
-				return Math.max(-maxAdj, Math.min(maxAdj, raw))
-			})
-		}
+	const toSeg = (item: HTMLElement): Segment => {
+		const info = meta.get(item)
+		return { item, text: info?.atomic ? '' : item.textContent ?? '', top: 0, bottom: 0, lead: info?.lead ?? '', breakBefore: info?.breakBefore ?? null, atomic: !!info?.atomic, first: true }
 	}
-
-	// --- Pass 4: Assemble line spans ---
-	// Each line becomes an inline-block span with white-space:nowrap and a random
-	// letter-spacing offset. A <br data-settle-br> between lines forces the visual break.
-	const lineSpans: HTMLElement[] = []
-
-	// Build new innerHTML by rebuilding from word spans' outerHTML, preserving
-	// inline ancestor context (em, strong, a, etc.) for each word.
-	const buildLineHTML = (lineWords: HTMLElement[]): string => {
-		// Group consecutive words that share the same parent element so inline ancestors
-		// (e.g. <code>, <em>) are emitted once per group, not once per word.
-		type Group = { parent: Element | null; words: HTMLElement[] }
-		const groups: Group[] = []
-		for (const word of lineWords) {
-			const parent = word.parentElement !== element ? word.parentElement : null
-			const last = groups[groups.length - 1]
-			if (last && last.parent === parent) {
-				last.words.push(word)
+	let lines: Segment[][] = []
+	let usedPretext = false
+	if (lineDetection === 'canvas' && _pretext !== null) {
+		try {
+			const cached = pretextCache.get(element)
+			let prepared: unknown
+			if (cached && cached.originalHTML === originalHTML) {
+				prepared = cached.prepared
 			} else {
-				groups.push({ parent, words: [word] })
+				prepared = _pretext.prepareWithSegments(element.textContent ?? '', getCanvasFont(element))
+				pretextCache.set(element, { originalHTML, prepared })
 			}
-		}
-		return groups.map(({ parent, words }) => {
-			const inner = words.map(w => w.outerHTML).join('')
-			if (!parent) return inner
-			let html = inner
-			let ancestor: Element | null = parent
-			while (ancestor && ancestor !== element) {
-				const shallow = ancestor.cloneNode(false) as Element
-				const shallowHTML = shallow.outerHTML
-				const split = shallowHTML.lastIndexOf('</')
-				html = shallowHTML.slice(0, split) + html + shallowHTML.slice(split)
-				ancestor = ancestor.parentElement
+			const { lines: pretextLines } = _pretext.layoutWithLines(prepared, contentWidth, getLineHeightPx(element))
+			let si = 0
+			for (const pl of pretextLines) {
+				const target = pl.text.replace(/\s+/g, '')
+				const line: Segment[] = []
+				let acc = ''
+				while (si < items.length) {
+					acc += (items[si].textContent ?? '').replace(/\s+/g, '')
+					line.push(toSeg(items[si]))
+					si++
+					if (acc.length >= target.length) break
+				}
+				if (line.length) lines.push(line)
 			}
-			return html
-		}).join('')
-	}
-
-	// Collect per-line HTML before clearing element
-	const lineHTMLs = lines.map(buildLineHTML)
-
-	// Generate random offsets (±spread em) for each line.
-	// In 'expand' mode (default), the sign is preserved so lines start wide and settle inward.
-	// In 'compress' mode, the sign is negated so lines start at zero and animate outward to natural.
-	const direction = options.direction ?? 'expand'
-	const rawOffsets = lines.map(() => (Math.random() * 2 - 1) * spread)
-	const offsets = direction === 'compress'
-		? rawOffsets.map((o) => -Math.abs(o))
-		: rawOffsets
-
-	// Write phase — replace element content with line spans.
-	// The settled target for each line is originalLSEm + targetTracking adjustment.
-	// The initial spacing starts from that target ± the random spread offset.
-	// We emit "0" rather than "0.0000em" when the value is exactly zero for cleaner markup.
-	let newHTML = ''
-	for (let i = 0; i < lines.length; i++) {
-		const trackingAdj    = targetTrackingValues ? targetTrackingValues[i] : 0
-		const settledValue   = originalLSEm + trackingAdj
-		// compress: start below settled value; expand: start above settled value
-		const rawInitial     = direction === 'compress'
-			? settledValue - Math.abs(offsets[i])
-			: settledValue + offsets[i]
-		const initialStr     = rawInitial === 0 ? '0' : `${rawInitial.toFixed(4)}em`
-		const delay          = stagger > 0 ? `transition-delay:${i * stagger}ms;` : ''
-		const transitionStyle = `transition:letter-spacing ${duration}ms ${easing};${delay}`
-		newHTML +=
-			`<span class="${SETTLE_CLASSES.line}" style="display:inline-block;white-space:nowrap;letter-spacing:${initialStr};${transitionStyle}">${lineHTMLs[i]}</span>`
-		if (i < lines.length - 1) {
-			newHTML += `<br data-settle-br>`
+			while (si < items.length) lines[lines.length - 1]?.push(toSeg(items[si++]))
+			lines = lines.flatMap((line) => {
+				const out: Segment[][] = [[]]
+				line.forEach((seg, k) => { if (k > 0 && seg.breakBefore) out.push([]); out[out.length - 1].push(seg) })
+				return out
+			})
+			usedPretext = lines.length > 0
+		} catch (err) {
+			warnOnce('[typsettle] canvas line detection failed — using the browser layout')
+			lines = []
 		}
 	}
+	if (!usedPretext) {
+		// BCR path. A word the browser itself breaks (after a hyphen, or with overflow-wrap) is split
+		// into one segment per line at the real break.
+		const segments: Segment[] = []
+		for (const item of items) {
+			const rects = item.getClientRects?.()
+			const rect = rects && rects.length ? rects[0] : item.getBoundingClientRect()
+			const info = meta.get(item)
+			const text = info?.atomic ? '' : item.textContent ?? ''
+			if (rects && rects.length > 1 && !info?.atomic && item.firstChild?.nodeType === Node.TEXT_NODE) {
+				for (const [k, piece] of splitAtLineBreaks(item.firstChild as Text, text).entries()) {
+					segments.push({ item, text: piece.text, top: piece.top, bottom: piece.bottom, lead: k === 0 ? info?.lead ?? '' : '', breakBefore: k === 0 ? info?.breakBefore ?? null : null, atomic: false, first: k === 0 })
+				}
+				continue
+			}
+			segments.push({ item, text, top: rect.top, bottom: rect.bottom ?? rect.top, lead: info?.lead ?? '', breakBefore: info?.breakBefore ?? null, atomic: !!info?.atomic, first: true })
+		}
+		// A word starts a new line when its vertical middle is below the bottom of the current line's
+		// boxes: a superscript or a larger word stays in its line, and tight line-heights stay apart.
+		let current: Segment[] | null = null
+		let groupBottom = -Infinity
+		for (const seg of segments) {
+			const middle = (seg.top + seg.bottom) / 2
+			if (current === null || middle > groupBottom || (current.length > 0 && seg.breakBefore)) {
+				current = []
+				lines.push(current)
+				groupBottom = seg.bottom
+			} else {
+				groupBottom = Math.max(groupBottom, seg.bottom)
+			}
+			current.push(seg)
+		}
+	}
+	if (lines.length === 0) return
+	const lineTexts = lines.map((line) => line.map((seg, k) => (k > 0 ? seg.lead : '') + seg.text).join('').replace(/\s+/g, ' ').trim())
 
-	element.innerHTML = newHTML
+	// --- Settled targets (optional) ---
+	let targetAdjustments: number[] = lines.map(() => 0)
+	const targetTrackingOption = opts.targetTracking
+	if (typeof targetTrackingOption === 'number' && Number.isFinite(targetTrackingOption)) {
+		targetAdjustments = lines.map(() => targetTrackingOption)
+	} else if (targetTrackingOption === 'auto') {
+		// Equalize optical density: dense lines open up, sparse lines tighten (±0.05em).
+		const font = getCanvasFont(element)
+		const densities = lineTexts.map((text) => measureLineDensity(text, font, fontSizePx))
+		const avg = densities.reduce((a, b) => a + b, 0) / densities.length
+		targetAdjustments = densities.map((d) => Math.max(-0.05, Math.min(0.05, (d - avg) * 2.0)))
+	}
 
-	// Collect the live line span elements after writing
-	element.querySelectorAll<HTMLElement>(`.${SETTLE_CLASSES.line}`).forEach((span) => {
-		lineSpans.push(span)
+	// --- Pass 4: Rebuild ---
+	const chains = new Map<Segment, Element[]>()
+	for (const line of lines) {
+		for (const seg of line) {
+			const ancestors: Element[] = []
+			let node: Element | null = seg.item.parentElement
+			while (node && node !== element) { ancestors.unshift(node); node = node.parentElement }
+			chains.set(seg, ancestors)
+		}
+	}
+	const justify = computedStyle.textAlign === 'justify'
+	const ws = computedStyle.whiteSpace
+	const lineWhiteSpace = ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces' ? 'pre' : 'nowrap'
+	const copied = new Set<Element>()
+	const fragment = document.createDocumentFragment()
+	const lineSpans: HTMLElement[] = []
+	lines.forEach((line, lineIndex) => {
+		const lineSpan = document.createElement('span')
+		lineSpan.className = SETTLE_CLASSES.line
+		lineSpan.style.display = 'inline-block'
+		lineSpan.style.whiteSpace = lineWhiteSpace
+		// text-indent is inherited: without this every line would be indented, not just the first.
+		lineSpan.style.textIndent = '0'
+		const nextSeg = lines[lineIndex + 1]?.[0]
+		if (justify && nextSeg && !nextSeg.breakBefore && contentWidth > 0) {
+			lineSpan.style.width = `${contentWidth}px`
+			lineSpan.style.textAlignLast = 'justify'
+		}
+		let openChain: { source: Element; clone: Element }[] = []
+		line.forEach((seg, k) => {
+			const ancestors = chains.get(seg) ?? []
+			let shared = 0
+			while (shared < openChain.length && shared < ancestors.length && openChain[shared].source === ancestors[shared]) shared++
+			openChain = openChain.slice(0, shared)
+			let parent: Node = shared ? openChain[shared - 1].clone : lineSpan
+			const lead = k === 0 ? seg.lead.replace(/[\r\n]+/g, '') : seg.lead
+			if (lead) parent.appendChild(document.createTextNode(lead))
+			for (let a = shared; a < ancestors.length; a++) {
+				let copy: Element
+				if (copied.has(ancestors[a])) {
+					copy = ancestors[a].cloneNode(false) as Element
+					copy.removeAttribute('id')
+				} else {
+					copy = ancestors[a]
+					copy.replaceChildren()
+				}
+				copied.add(ancestors[a])
+				parent.appendChild(copy)
+				openChain.push({ source: ancestors[a], clone: copy })
+				parent = copy
+			}
+			if (seg.atomic) {
+				parent.appendChild(seg.item)
+			} else {
+				const word = document.createElement('span')
+				word.className = SETTLE_CLASSES.word
+				word.textContent = seg.text
+				parent.appendChild(word)
+			}
+		})
+		fragment.appendChild(lineSpan)
+		lineSpans.push(lineSpan)
+		if (lineIndex < lines.length - 1) {
+			const authorBreak = lines[lineIndex + 1][0].breakBefore
+			if (authorBreak) {
+				fragment.appendChild(authorBreak.cloneNode(false))
+			} else {
+				const br = document.createElement('br')
+				br.setAttribute('data-settle-br', '')
+				br.setAttribute('aria-hidden', 'true')
+				fragment.appendChild(br)
+			}
+		}
 	})
+	element.innerHTML = ''
+	element.appendChild(fragment)
 
-	// --- Pass 5: Transition trigger ---
-	// One rAF lets the browser paint the initial offset state, then setting
-	// letter-spacing to the settled target triggers the CSS transition.
-	// Settled target = originalLSEm + per-line density adjustment (if any).
-	requestAnimationFrame(() => {
-		lineSpans.forEach((span, i) => {
-			const trackingAdj  = targetTrackingValues ? targetTrackingValues[i] : 0
-			const settledValue = originalLSEm + trackingAdj
-			span.style.letterSpacing = settledValue === 0 ? '0' : `${settledValue.toFixed(4)}em`
-		})
-
-		// Restore scroll position after DOM mutations (inner rAF for scroll restore)
-		requestAnimationFrame(() => {
-			if (Math.abs(window.scrollY - scrollY) > 2) {
-				window.scrollTo({ top: scrollY, behavior: 'instant' })
-			}
-		})
+	// --- Pass 5: Animate ---
+	// A positive settled adjustment is limited to the room each line has, so the settled state never
+	// overflows (targetTracking used to leave lines wider than the column).
+	const settled = lineSpans.map((span, i) => {
+		const adj = targetAdjustments[i]
+		if (adj <= 0 || justify) return originalLSEm + adj
+		const room = contentWidth - span.getBoundingClientRect().width - 0.5
+		const chars = [...(span.textContent ?? '')].length || 1
+		const maxAdjEm = Math.max(0, room / chars / fontSizePx)
+		return originalLSEm + Math.min(adj, maxAdjEm)
+	})
+	lineSpans.forEach((span, i) => {
+		// expand starts wider and settles in; compress starts tighter and settles out.
+		const offset = Math.random() * spread
+		const start = direction === 'compress' ? settled[i] - offset : settled[i] + offset
+		span.style.transition = 'none'
+		span.style.letterSpacing = emValue(start)
+		settledEm.set(span, settled[i])
+	})
+	// The browser must compute the start state before the transition is switched on, or it never sees
+	// a change to animate (setting the target in a later frame without this was a race that usually lost).
+	void element.offsetWidth
+	lineSpans.forEach((span, i) => {
+		span.style.transition = `letter-spacing ${duration}ms ${easing}`
+		if (stagger > 0) span.style.transitionDelay = `${i * stagger}ms`
+		span.style.letterSpacing = emValue(settled[i])
 	})
 }
 
 /**
- * Removes settle markup and restores the element to its original HTML.
+ * Removes settle markup and restores the element to its original content (the original nodes,
+ * when known).
  *
  * @param element      - The element that was previously animated
- * @param originalHTML - The snapshot passed to the original applySettle call
+ * @param originalHTML - The snapshot passed to the original applySettle call (optional)
  */
-export function removeSettle(element: HTMLElement, originalHTML: string): void {
-	element.innerHTML = originalHTML
+export function removeSettle(element: HTMLElement, originalHTML?: string): void {
+	const html = originalHTML ?? originals.get(element) ?? getCleanHTML(element)
+	const snap = snapshots.get(element)
+	if (snap && snap.html === html) restoreSnapshot(snap)
+	else element.innerHTML = html
+	snapshots.delete(element)
+	originals.delete(element)
 }
 
 /**
- * Resets the element to its original HTML and re-runs the settle animation.
- * When options.quietReplay is true and stagger > 0, avoids the simultaneous all-lines
- * flash: instead each line briefly offsets from its settled state and eases back,
- * staggered across lines. Falls back to normal applySettle when stagger is 0.
+ * Re-runs the settle animation. With `quietReplay`, the existing lines are kept and each briefly
+ * offsets from its settled spacing and eases back (staggered when `stagger` is set); otherwise the
+ * element is rebuilt and animated from scratch.
  *
  * @param element      - The live DOM element to animate
- * @param originalHTML - HTML snapshot taken before the first applySettle call
+ * @param originalHTML - HTML snapshot taken before the first applySettle call (optional: the element's
+ *                       own original is used when omitted)
  * @param options      - SettleOptions (merged with defaults)
+ * @returns              A function that cancels pending staggered replays
  */
 export function replaySettle(
 	element: HTMLElement,
-	originalHTML: string,
+	originalHTML?: string,
 	options: SettleOptions = {},
 ): () => void {
-	const stagger     = options.stagger ?? DEFAULTS.stagger
+	const html = originalHTML ?? originals.get(element) ?? getCleanHTML(element)
+	const stagger     = Math.max(0, finiteOr(options.stagger, DEFAULTS.stagger, 'stagger'))
 	const quietReplay = options.quietReplay ?? false
+	const existingLineSpans = Array.from(element.querySelectorAll<HTMLElement>(`.${SETTLE_CLASSES.line}`))
 
-	if (!quietReplay) {
-		removeSettle(element, originalHTML)
-		applySettle(element, originalHTML, options)
+	if (!quietReplay || existingLineSpans.length === 0) {
+		applySettle(element, html, options)
 		return () => {}
 	}
 
-	// quietReplay (stagger may be 0 — all lines animate simultaneously):
-	// Find the existing line spans (already settled from a prior run), then
-	// per-line: snap to offset, remove transition, let browser paint; then
-	// restore transition and snap back to settled — all staggered.
-	// If there are no existing line spans (e.g. first run), fall back to normal.
-	const existingLineSpans = element.querySelectorAll<HTMLElement>(`.${SETTLE_CLASSES.line}`)
-	if (existingLineSpans.length === 0) {
-		removeSettle(element, originalHTML)
-		applySettle(element, originalHTML, options)
-		return () => {}
-	}
-
-	const spread   = options.spread   ?? DEFAULTS.spread
-	const duration = options.duration ?? DEFAULTS.duration
-	const easing   = options.easing   ?? DEFAULTS.easing
+	const spread   = clampSpread(Math.abs(finiteOr(options.spread, DEFAULTS.spread, 'spread')))
+	const duration = Math.max(0, finiteOr(options.duration, DEFAULTS.duration, 'duration'))
+	const easing   = safeEasing(options.easing ?? DEFAULTS.easing)
 	const direction = options.direction ?? 'expand'
-
-	// Read the current settled letter-spacing for each line before mutating anything
-	const settledValues = Array.from(existingLineSpans).map((span) => {
-		const ls = getComputedStyle(span).letterSpacing
-		const px = parseFloat(ls) || 0
-		// Convert back to em relative to span's own font-size
-		const fs = parseFloat(getComputedStyle(span).fontSize) || 16
-		return px / fs
-	})
-
 	const timerIds: ReturnType<typeof setTimeout>[] = []
 
 	existingLineSpans.forEach((span, i) => {
-		const delay = i * stagger
-
 		const id = setTimeout(() => {
-			const settledEm = settledValues[i]
-			const rawOffset = (Math.random() * 2 - 1) * spread
-			const offset    = direction === 'compress' ? -Math.abs(rawOffset) : rawOffset
-			const offsetEm  = settledEm + offset
-
-			// Snap to offset without a transition
+			// The stored settled value, never the computed one (mid-transition it is a value in between).
+			const target = settledEm.get(span) ?? 0
+			const offset = Math.random() * spread
+			const start = direction === 'compress' ? target - offset : target + offset
 			span.style.transition = 'none'
-			span.style.letterSpacing = offsetEm === 0 ? '0' : `${offsetEm.toFixed(4)}em`
-
-			// One rAF so the browser paints the offset state before re-enabling transition
-			requestAnimationFrame(() => {
-				span.style.transition = `letter-spacing ${duration}ms ${easing}`
-				span.style.letterSpacing = settledEm === 0 ? '0' : `${settledEm.toFixed(4)}em`
-			})
-		}, delay)
-
+			span.style.letterSpacing = emValue(start)
+			void span.offsetWidth
+			span.style.transition = `letter-spacing ${duration}ms ${easing}`
+			span.style.letterSpacing = emValue(target)
+		}, i * stagger)
 		timerIds.push(id)
 	})
-
 	return () => { timerIds.forEach(clearTimeout) }
 }
