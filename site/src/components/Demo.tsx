@@ -3,6 +3,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react"
 import { SettleText } from "@overpunch/typsettle"
 
+/** Heading shown above the paragraphs — long enough to wrap, so the stagger reads line by line. */
+const HEADING = `Every line finds its own tracking, one after another, and settles into place.`
+
 const PARAGRAPHS = [
 	`The first thing a reader notices about a text is not the words but the colour — the even grey field of the paragraph taken as a whole. Before meaning, before syntax, there is that impression: light, dark, dense, airy. The typographer works to make it even, to give the reader a surface to move across without resistance. A page-load animation that begins in chaos and resolves into order says something about the text it introduces: that it knows where it is going.`,
 	`Tracking — the spacing between letters across a whole word or line — is the most delicate of the compositor's instruments. Too tight and letters close against each other; too loose and words fragment. The right amount is invisible.`,
@@ -113,6 +116,15 @@ export default function Demo() {
 		fontVariationSettings: '"wght" 300, "opsz" 18, "wdth" 100',
 	}), [])
 
+	/** Memoised heading style — display size, so the tracking change is easy to see */
+	const headingStyle = useMemo<React.CSSProperties>(() => ({
+		fontFamily: "var(--font-merriweather), serif",
+		fontSize: "clamp(1.75rem, 4vw, 2.75rem)",
+		lineHeight: "1.2",
+		fontWeight: 400,
+		margin: 0,
+	}), [])
+
 	/** Stabilised toggle callback */
 	const handleToggleCompare = useCallback(() => setComparing(v => !v), [])
 
@@ -164,6 +176,9 @@ export default function Demo() {
 			</div>
 			<div ref={containerRef} className="relative pb-8">
 				<div className="flex flex-col gap-8">
+					<SettleText key={`${key}-h`} as="h3" spread={spread} duration={duration} stagger={stagger} easing={easing} direction={direction} style={headingStyle}>
+						{HEADING}
+					</SettleText>
 					{PARAGRAPHS.map((para, i) => (
 						<SettleText key={`${key}-${i}`} spread={spread} duration={duration} stagger={stagger} easing={easing} direction={direction} style={sampleStyle}>
 							{para}
@@ -172,6 +187,7 @@ export default function Demo() {
 				</div>
 				{beforeAfter && (
 					<div aria-hidden={true} style={{ position: 'absolute', top: 0, left: 0, width: '100%', opacity: 0.25, pointerEvents: 'none' }} className="flex flex-col gap-8">
+						<h3 style={headingStyle}>{HEADING}</h3>
 						{PARAGRAPHS.map((para, i) => (
 							<p key={i} style={{ ...sampleStyle, margin: 0 }}>{para}</p>
 						))}
