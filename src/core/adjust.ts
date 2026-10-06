@@ -520,7 +520,21 @@ export function applySettle(
 			while (shared < openChain.length && shared < ancestors.length && openChain[shared].source === ancestors[shared]) shared++
 			openChain = openChain.slice(0, shared)
 			let parent: Node = shared ? openChain[shared - 1].clone : lineSpan
-			const lead = k === 0 ? seg.lead.replace(/[\r\n]+/g, '') : seg.lead
+			let lead = seg.lead
+			if (k === 0 && /[\r\n]/.test(lead)) {
+				// A newline at a line start is the line break itself, which the line span now provides. If it
+				// was the only separator, a space at the end of the previous line keeps the words apart.
+				lead = lead.replace(/[\r\n]+/g, '')
+				const prev = lineSpans[lineSpans.length - 1]
+				if (!lead && prev) {
+					// Normal white-space, so the space collapses at the line end even in a pre line.
+					const space = document.createElement('span')
+					space.className = SETTLE_CLASSES.word
+					space.style.whiteSpace = 'normal'
+					space.textContent = ' '
+					prev.appendChild(space)
+				}
+			}
 			if (lead) parent.appendChild(document.createTextNode(lead))
 			for (let a = shared; a < ancestors.length; a++) {
 				let copy: Element
