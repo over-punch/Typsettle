@@ -125,10 +125,10 @@ The animation is **client-only by design** — it reads live browser layout to d
 | `easing` | `'cubic-bezier(0.25, 0.1, 0.25, 1)'` | CSS easing string |
 | `stagger` | `0` | Delay between lines in ms. `0` settles all lines together; `80` gives a cascading effect |
 | `active` | `true` | Set `false` to skip the animation entirely (e.g. for conditional disabling) |
-| `targetTracking` | `0` | Letter-spacing each line settles to in em. `0` = natural spacing. `'auto'` measures the original rendered tracking and settles there |
-| `direction` | `'expand'` | `'expand'` animates from condensed → normal tracking; `'compress'` animates from normal → condensed |
+| `targetTracking` | `0` | Extra letter-spacing (em) each line settles to, on top of the element's own. `0` = natural spacing. `'auto'` evens out optical density: dense lines settle slightly looser and sparse lines slightly tighter (±0.05em). A positive amount is limited to the room each line has, so the settled text never overflows |
+| `direction` | `'expand'` | `'expand'` starts each line looser (by up to `spread`) and settles in; `'compress'` starts each line tighter and settles out |
 | `intersect` | `false` | Replay the animation each time the element scrolls into view |
-| `quietReplay` | `false` | When `true`, replays with each line individually offsetting then settling (staggered), instead of all lines flashing simultaneously. Has no effect when `stagger` is `0` |
+| `quietReplay` | `false` | When `true`, a replay keeps the existing lines and offsets each one from its settled spacing, then eases back (staggered when `stagger` is set; all at once when it is `0`), instead of rebuilding the element |
 | `lineDetection` | `'bcr'` | `'bcr'` reads actual browser layout — ground truth, works with any font and inline HTML. `'canvas'` uses `@chenglou/pretext` for arithmetic line breaking with no forced reflow on resize (`npm install @chenglou/pretext`). Falls back to `'bcr'` while pretext loads |
 | `as` | `'p'` | HTML element to render, e.g. `'h1'`, `'div'`. *(React component only)* |
 
@@ -142,7 +142,7 @@ The animation is **client-only by design** — it reads live browser layout to d
 |----------|-------------|
 | `applySettle(element, originalHTML, options)` | Wrap lines and run the settle animation |
 | `removeSettle(element, originalHTML)` | Restore the element to its original markup |
-| `replaySettle(element)` | Replay the settle animation on a previously-settled element |
+| `replaySettle(element, originalHTML?, options?)` | Replay the settle animation on a previously-settled element (the element's own original is used when `originalHTML` is omitted). Returns a function that cancels pending staggered replays |
 | `getCleanHTML(element)` | Return the element's inner HTML with any Typsettle spans stripped |
 
 ### React hook
@@ -161,7 +161,7 @@ Accepts all `SettleOptions` plus:
 | Prop | Type | Description |
 |------|------|-------------|
 | `as` | `string` | HTML element to render (default `'p'`) |
-| `onReady` | `(replay: () => void) => void` | Callback fired once the animation completes, receiving a `replay` function |
+| `onReady` | `(replay: () => void) => void` | Called when the component mounts, with a `replay` function to run the animation again |
 
 ### Constants
 
@@ -173,11 +173,17 @@ Accepts all `SettleOptions` plus:
 
 ## How it works
 
-Each visual line is wrapped in a `<span>`. A random `letter-spacing` value in `[-spread, +spread]` em is applied immediately. On the next `requestAnimationFrame`, a CSS transition is set on each span and `letter-spacing` is set to `0em` — the browser animates each line back to zero. Stagger is implemented as a per-span `transition-delay` of `i × stagger` ms.
+Each visual line is wrapped in a `<span>`. Each line is set to its start spacing (its settled spacing plus a random offset up to `spread` em: looser for `expand`, tighter for `compress`) with transitions off, the browser computes that state, then a CSS transition is switched on and the settled spacing set — so the animation runs however `applySettle` is called (from a task, a promise, a frame). Stagger is a per-span `transition-delay` of `i × stagger` ms. The settled spacing is the element's own `letter-spacing`, so your tracking is kept.
 
-The line spans are **not** automatically removed after the transition completes — they remain in the DOM with `letter-spacing: 0em`. Call `removeSettle(el, original)` manually if you need to restore the original markup (e.g. before a re-run). The animation is skipped entirely if `prefers-reduced-motion: reduce` is set or `active` is `false`.
+The line spans stay in the DOM after the transition. Call `removeSettle(el)` to restore the original markup. The animation is skipped (the original content is shown, untouched) if `prefers-reduced-motion: reduce` is set or `active` is `false`.
 
-**Line break safety:** Line breaks are locked to the browser's natural layout. Each run starts from the original HTML, detects lines at zero letter-spacing, then wraps them with `white-space: nowrap`. Word breaks never change during or after the animation. Lines may overflow briefly during the transition (when random offsets are applied) but settle to `letter-spacing: 0em` — their exact natural width — by the time the animation ends.
+**Line break safety:** each run starts from the original content, wraps every word in a plain inline span (spaces between words stay in the text flow, so the layout is the browser's own), groups the words into lines, then locks each line with `white-space: nowrap`. Lines keep exactly the words the browser put on them, including a word the browser breaks at a hyphen or with `overflow-wrap`; CJK and Thai break between characters. Justified text stays justified and `text-indent` applies to the first line only. With `expand`, lines are wider than their settled width while they animate, so they can briefly extend past the column (by up to `spread` em per character).
+
+**Markup:** inline elements, your own `<br>`, images and the spaces between elements are kept, and the original elements are reused, so event listeners on them (React's included) keep working. An element that runs across a line break becomes one copy per line (a link over two lines becomes two links; only the first keeps its `id`). `getCleanHTML()` returns the original markup. Copied text includes a line break at each line end.
+
+**Limits:** lines are locked at the width they had when the effect ran, with the fonts loaded then. The React hook and the Webflow embed re-run on resize and font load; with the vanilla API, call `applySettle` again after a resize or once fonts have loaded. Automatic hyphenation (`hyphens: auto`) can't happen inside a locked line, so such a word moves whole to the next line.
+
+**React is optional.** The main entry also exports the React hook and component, so it imports `react`; without React installed, import the vanilla API from `@overpunch/typsettle/core`.
 
 ---
 
